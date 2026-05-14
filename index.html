@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Music Discovery — Spotify + YouTube</title>
+  <title>Music Discovery — YouTube Player</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,34 +12,29 @@
   <div id="setup-screen" class="screen hidden">
     <div class="setup-card">
       <div class="login-logo">
-        <svg viewBox="0 0 24 24" fill="currentColor" width="40" height="40" style="color:#1DB954">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="44" height="44" style="color:#1DB954">
           <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
         </svg>
       </div>
       <h1>Music Discovery</h1>
-      <p>Tell us what you love — we'll find fresh songs and play them through YouTube. Zero repeats.</p>
-
-      <div class="setup-field">
-        <label for="input-artists">Your Favourite Artists</label>
-        <input id="input-artists" type="text"
-          placeholder="e.g. The Weeknd, Drake, BTS, Taylor Swift"
-          autocomplete="off" spellcheck="false">
-        <small>Comma-separated · up to 10 artists · we'll discover songs based on them</small>
-      </div>
+      <p>Search any song → we find it on YouTube and automatically queue similar songs — like Spotify Radio, but free.</p>
 
       <div class="setup-field">
         <label for="input-yt-key">YouTube Data API Key</label>
         <input id="input-yt-key" type="text" placeholder="AIzaSy…" autocomplete="off" spellcheck="false">
-        <small>Free key from <strong>console.cloud.google.com</strong> → YouTube Data API v3</small>
+        <small>Free from <strong>console.cloud.google.com</strong> → Enable "YouTube Data API v3" → Credentials → API Key</small>
+      </div>
+
+      <div class="setup-field">
+        <label for="input-lfm-key">Last.fm API Key</label>
+        <input id="input-lfm-key" type="text" placeholder="abc123…" autocomplete="off" spellcheck="false">
+        <small>Free from <a href="https://www.last.fm/api/account/create" target="_blank" style="color:var(--accent)">last.fm/api/account/create</a> — takes 1 minute, no credit card</small>
       </div>
 
       <button id="btn-save-keys" class="btn-primary">Start Discovering Music</button>
       <p id="setup-error" class="setup-error hidden"></p>
     </div>
   </div>
-
-  <!-- login-screen kept as hidden placeholder (no longer used) -->
-  <div id="login-screen" class="screen hidden"></div>
 
   <!-- ── MAIN PLAYER ────────────────────────────────────────── -->
   <div id="player-screen" class="screen hidden">
@@ -48,13 +43,25 @@
     <aside id="queue-sidebar">
       <h2>Up Next</h2>
       <ul id="queue-list">
-        <li class="queue-placeholder">Loading recommendations…</li>
+        <li class="queue-placeholder">Loading…</li>
       </ul>
-      <button id="btn-logout" class="btn-ghost">Disconnect</button>
+      <button id="btn-logout" class="btn-ghost">Change Setup</button>
     </aside>
 
     <!-- Main player area -->
     <main id="player-main">
+
+      <!-- Search bar -->
+      <div id="search-wrap">
+        <input id="search-input" type="text"
+          placeholder="Search a song or artist…"
+          autocomplete="off" spellcheck="false">
+        <button id="btn-search" aria-label="Search">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+            <path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+          </svg>
+        </button>
+      </div>
 
       <!-- Album art + loading overlay -->
       <div id="album-art-wrap">
@@ -81,34 +88,30 @@
 
       <!-- Controls -->
       <div id="controls">
-        <button id="btn-prev" class="ctrl-btn ctrl-sm" aria-label="Previous song" title="Previous">
+        <button id="btn-prev" class="ctrl-btn ctrl-sm" aria-label="Previous" title="Previous">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
         </button>
         <button id="btn-play" class="ctrl-btn ctrl-lg" aria-label="Play / Pause">
-          <svg id="icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          <svg id="icon-play"  viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
           <svg id="icon-pause" viewBox="0 0 24 24" fill="currentColor" class="hidden"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
         </button>
-        <button id="btn-skip" class="ctrl-btn ctrl-sm" aria-label="Skip song" title="Skip">
+        <button id="btn-skip" class="ctrl-btn ctrl-sm" aria-label="Skip" title="Skip">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2z"/></svg>
         </button>
-        <button id="btn-never" class="ctrl-btn ctrl-sm ctrl-danger" aria-label="Never suggest this song again" title="Never suggest again">
+        <button id="btn-never" class="ctrl-btn ctrl-sm ctrl-danger" aria-label="Never suggest again" title="Never again">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11H7v-2h10v2z"/></svg>
         </button>
       </div>
 
     </main>
-
   </div>
 
-  <!-- Toast container (injected by player.js) -->
+  <!-- Toast notifications -->
   <div id="toast-container"></div>
 
-  <!-- Hidden YouTube IFrame player (0×0, driven by JS) -->
+  <!-- Hidden YouTube player -->
   <div id="yt-player"></div>
-
-  <!-- YouTube IFrame API — must load before app.js uses YT global -->
   <script src="https://www.youtube.com/iframe_api"></script>
-  <!-- App entry point (imports all other modules) -->
   <script type="module" src="app.js"></script>
 
 </body>
