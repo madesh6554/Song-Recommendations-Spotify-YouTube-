@@ -79,7 +79,53 @@ export async function buildInitialQueue(artistName) {
   return getChartTopTracks(20).catch(() => []);
 }
 
-// Search for a song the user typed — returns Last.fm track objects.
-export async function searchForSong(query) {
-  return searchTrack(query, 5);
+// Search YouTube directly for a user query — works for ALL languages.
+// Returns a ready-to-play track object (youtubeId already set).
+export async function searchYouTubeDirect(query) {
+  const params = new URLSearchParams({
+    part:            'snippet',
+    type:            'video',
+    videoCategoryId: '10',
+    maxResults:      '5',
+    q:               query,
+    key:             YOUTUBE_API_KEY,
+  });
+
+  const res = await fetch(`${YT_SEARCH}?${params}`);
+  if (res.status === 403) throw new Error('YOUTUBE_QUOTA_EXCEEDED');
+  if (!res.ok) throw new Error(`YouTube search error: ${res.status}`);
+
+  const data  = await res.json();
+  const items = (data.items || []).filter(i => i.id?.videoId);
+  if (!items.length) return null;
+
+  const item = items[0];
+  const videoId = item.id.videoId;
+  const thumb   = item.snippet.thumbnails?.high?.url
+                || item.snippet.thumbnails?.default?.url || '';
+
+  return {
+    id:        videoId,
+    youtubeId: videoId,
+    name:      item.snippet.title,
+    artists:   [{ name: item.snippet.channelTitle }],
+    album:     { images: [{ url: thumb }] },
+    // Store raw title + channel so we can extract artist for Last.fm later
+    _rawTitle:   item.snippet.title,
+    _rawChannel: item.snippet.channelTitle,
+  };
+}
+
+// Parse "Artist - Song Title" or "Song Title - Artist" from a YouTube video title.
+export function parseVideoTitle(title, channel) {
+  const clean = title.replace(/\(.*?\)|\[.*?\]/g, '').trim();
+  const dash  = clean.match(/^(.+?)\s*[-–|]\s*(.+)$/);
+  if (dash) {
+    // Heuristic: shorter part is usually the artist name
+    const a = dash[1].trim(), b = dash[2].trim();
+    return a.length <= b.length
+      ? { artist: a, title: b }
+      : { artist: b, title: a };
+  }
+  return { artist: channel, title: clean };
 }

@@ -1,5 +1,5 @@
 import { QUEUE_LOW_WATERMARK, keysConfigured, saveSetup } from './config.js';
-import { getNextSongs, buildInitialQueue, searchForSong, enrichTrack } from './music.js';
+import { getNextSongs, buildInitialQueue, enrichTrack, searchYouTubeDirect, parseVideoTitle } from './music.js';
 import { enqueue, dequeue, peekAll, queueLength, addToNeverSuggest } from './queue.js';
 import { loadVideo, togglePlay, setOnEnded, setOnProgress, isPlaying } from './youtube.js';
 import {
@@ -102,19 +102,34 @@ async function initSession() {
 async function handleSearch(query) {
   showLoadingState();
   try {
-    const results = await searchForSong(query);
-    if (!results.length) {
+    // Search YouTube directly — works for ALL languages (Tamil, Hindi, Korean…)
+    const track = await searchYouTubeDirect(query);
+    if (!track) {
       showError(`No results for "${query}". Try a different spelling.`);
       hideLoadingState();
       return;
     }
-    const track = results[0];
-    await playTrack(track);
-    showInfo(`Playing: ${track.name} — ${track.artists[0].name}`);
+
+    if (currentTrack) historyPush(currentTrack);
+    currentTrack = track;
+    loadVideo(track.youtubeId);
+    updateCard(track);
+    updateQueueSidebar(peekAll());
+    hideLoadingState();
+    setPlayingState(true);
+
+    // Get Last.fm recommendations based on the parsed song/artist
+    const { artist, title } = parseVideoTitle(track._rawTitle, track._rawChannel);
+    queueSimilarSongs(artist, title);
+
   } catch (err) {
     hideLoadingState();
-    showError('Search failed. Check your API keys.');
-    console.error(err);
+    if (err.message === 'YOUTUBE_QUOTA_EXCEEDED') {
+      showError('YouTube daily limit reached. Try again tomorrow.');
+    } else {
+      showError('Search failed. Check your YouTube API key.');
+      console.error(err);
+    }
   }
 }
 

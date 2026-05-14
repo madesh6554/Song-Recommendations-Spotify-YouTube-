@@ -45,7 +45,13 @@ function stopProgress() {
 }
 
 export function loadVideo(videoId) {
-  const load = () => player.loadVideoById(videoId);
+  const load = () => {
+    player.loadVideoById(videoId);
+    // Some browsers block iframe autoplay — force play after a short delay
+    setTimeout(() => {
+      try { player.playVideo(); } catch {}
+    }, 800);
+  };
   if (playerReady) { load(); }
   else {
     const t = setInterval(() => { if (playerReady) { clearInterval(t); load(); } }, 200);
