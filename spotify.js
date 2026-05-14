@@ -26,7 +26,7 @@ function dedupe(tracks) {
   return tracks.filter(t => t?.id && !seen.has(t.id) && seen.add(t.id));
 }
 
-// ── User profile (to get market/country code) ─────────────────
+// ── User profile ──────────────────────────────────────────────
 async function fetchUserMarket(token) {
   try {
     const data = await spotifyFetch('/me', token);
@@ -36,7 +36,8 @@ async function fetchUserMarket(token) {
   }
 }
 
-// ── Top tracks & artists (still free in 2024) ─────────────────
+// ── Core endpoints (all free, non-deprecated) ─────────────────
+
 export async function fetchTopTracks(token, limit = 20, timeRange = 'medium_term') {
   const data = await spotifyFetch(
     `/me/top/tracks?limit=${limit}&time_range=${timeRange}`,
@@ -61,7 +62,6 @@ export async function fetchRecentlyPlayed(token, limit = 50) {
   return (data.items || []).map(item => item.track.id);
 }
 
-// Get an artist's popular tracks — returns full track objects with album art
 async function fetchArtistTopTracks(token, artistId, market) {
   const data = await spotifyFetch(
     `/artists/${artistId}/top-tracks?market=${market}`,
@@ -70,42 +70,70 @@ async function fetchArtistTopTracks(token, artistId, market) {
   return data.tracks || [];
 }
 
+// ── Fallback: genre search for new/empty accounts ─────────────
+// Uses /search which is always free and always returns results.
+const FALLBACK_GENRES = ['pop', 'hip-hop', 'rock', 'r%26b', 'electronic', 'indie', 'latin', 'k-pop'];
+
+async function fetchPopularByGenre(token, market) {
+  const genre = FALLBACK_GENRES[Math.floor(Math.random() * FALLBACK_GENRES.length)];
+  try {
+    const data = await spotifyFetch(
+      `/search?q=genre:${genre}&type=track&market=${market}&limit=50`,
+      token
+    );
+    return data.tracks?.items || [];
+  } catch {
+    // Absolute last resort: search for "top hits"
+    try {
+      const data = await spotifyFetch(
+        `/search?q=top+hits&type=track&market=${market}&limit=50`,
+        token
+      );
+      return data.tracks?.items || [];
+    } catch {
+      return [];
+    }
+  }
+}
+
 // ── Recommendation engine ─────────────────────────────────────
 //
-// Strategy (uses ONLY free, non-deprecated Spotify endpoints):
-//   1. Get user's top artists (medium or long term)
-//   2. For each top artist → fetch their top tracks (free endpoint)
-//   3. Mix in user's own top tracks from a different time range for variety
-//   4. Deduplicate + shuffle → the heard-list in queue.js filters repeats
+// Primary path  (account has listening history):
+//   top artists → each artist's top tracks → shuffle + dedupe
 //
-// This gives fresh songs by artists in the user's taste profile.
+// Fallback path (new account / no history):
+//   genre search via /search → popular tracks matching user's region
 
 export async function buildRecommendations(token, fallbackToLongTerm = false) {
+  const market   = await fetchUserMarket(token);
   const timeRange = fallbackToLongTerm ? 'long_term' : 'medium_term';
-  const market    = await fetchUserMarket(token);
-
-  // Fetch user's top artists and a different time-range of top tracks in parallel
   const altRange  = fallbackToLongTerm ? 'short_term' : 'long_term';
+
+  // Try to get personalized data in parallel
   const [topArtists, altTopTracks] = await Promise.all([
-    fetchTopArtists(token, 10, timeRange),
+    fetchTopArtists(token, 10, timeRange).catch(() => []),
     fetchTopTracks(token, 20, altRange).catch(() => []),
   ]);
 
-  if (!topArtists.length && !altTopTracks.length) {
-    throw new Error('No listening history found on this Spotify account yet.');
+  let allTracks = [];
+
+  if (topArtists.length > 0) {
+    // Personalized: get top tracks for each of the user's top artists
+    const artistTrackGroups = await Promise.all(
+      topArtists.map(a => fetchArtistTopTracks(token, a.id, market).catch(() => []))
+    );
+    allTracks = [...artistTrackGroups.flat(), ...altTopTracks];
   }
 
-  // Fetch top tracks for each of the user's top artists (in parallel, errors skipped)
-  const artistTrackGroups = await Promise.all(
-    topArtists.map(a =>
-      fetchArtistTopTracks(token, a.id, market).catch(() => [])
-    )
-  );
+  // If still empty (new account or all calls failed) → genre search fallback
+  if (allTracks.length === 0) {
+    allTracks = await fetchPopularByGenre(token, market);
+  }
 
-  // Combine: artist top-tracks + user's alt-range top tracks
-  const allTracks = [...artistTrackGroups.flat(), ...altTopTracks];
-  const unique    = dedupe(allTracks);
-  const shuffled  = shuffle(unique);
+  // Double fallback: try a different time range
+  if (allTracks.length === 0 && !fallbackToLongTerm) {
+    return buildRecommendations(token, true);
+  }
 
-  return shuffled.slice(0, INITIAL_QUEUE_SIZE * 2); // extra buffer for the heard-list filter
+  return shuffle(dedupe(allTracks)).slice(0, INITIAL_QUEUE_SIZE * 2);
 }
