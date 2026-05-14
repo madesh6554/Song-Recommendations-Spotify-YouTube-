@@ -9,7 +9,7 @@ async function spotifyFetch(path, token) {
 
   if (res.status === 429) {
     const retryAfter = parseInt(res.headers.get('Retry-After') || '3', 10);
-    await sleep(retryAfter * 1000);
+    await new Promise(r => setTimeout(r, retryAfter * 1000));
     return spotifyFetch(path, token);
   }
 
@@ -17,16 +17,33 @@ async function spotifyFetch(path, token) {
   return res.json();
 }
 
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
+function shuffle(arr) {
+  return [...arr].sort(() => Math.random() - 0.5);
 }
 
-function randomSample(arr, n) {
-  const shuffled = [...arr].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, n);
+function dedupe(tracks) {
+  const seen = new Set();
+  return tracks.filter(t => t?.id && !seen.has(t.id) && seen.add(t.id));
 }
 
-// ── Public API ────────────────────────────────────────────────
+// ── User profile (to get market/country code) ─────────────────
+async function fetchUserMarket(token) {
+  try {
+    const data = await spotifyFetch('/me', token);
+    return data.country || 'US';
+  } catch {
+    return 'US';
+  }
+}
+
+// ── Top tracks & artists (still free in 2024) ─────────────────
+export async function fetchTopTracks(token, limit = 20, timeRange = 'medium_term') {
+  const data = await spotifyFetch(
+    `/me/top/tracks?limit=${limit}&time_range=${timeRange}`,
+    token
+  );
+  return data.items || [];
+}
 
 export async function fetchTopArtists(token, limit = 10, timeRange = 'medium_term') {
   const data = await spotifyFetch(
@@ -44,60 +61,51 @@ export async function fetchRecentlyPlayed(token, limit = 50) {
   return (data.items || []).map(item => item.track.id);
 }
 
-async function fetchRelatedArtists(token, artistId) {
-  const data = await spotifyFetch(`/artists/${artistId}/related-artists`, token);
-  return data.artists || [];
-}
-
-async function fetchArtistTopTracks(token, artistId) {
+// Get an artist's popular tracks — returns full track objects with album art
+async function fetchArtistTopTracks(token, artistId, market) {
   const data = await spotifyFetch(
-    `/artists/${artistId}/top-tracks?market=from_token`,
+    `/artists/${artistId}/top-tracks?market=${market}`,
     token
   );
   return data.tracks || [];
 }
 
-// ── Recommendation engine (no /recommendations endpoint needed) ──
+// ── Recommendation engine ─────────────────────────────────────
 //
-// Strategy:
-//  1. Get user's top artists
-//  2. Pick a few randomly → fetch their related artists
-//  3. From those related artists, fetch their top tracks
-//  4. Shuffle and return — these are songs the user likely hasn't heard
-//     but will enjoy (same musical neighbourhood as their taste)
+// Strategy (uses ONLY free, non-deprecated Spotify endpoints):
+//   1. Get user's top artists (medium or long term)
+//   2. For each top artist → fetch their top tracks (free endpoint)
+//   3. Mix in user's own top tracks from a different time range for variety
+//   4. Deduplicate + shuffle → the heard-list in queue.js filters repeats
+//
+// This gives fresh songs by artists in the user's taste profile.
 
 export async function buildRecommendations(token, fallbackToLongTerm = false) {
-  const timeRange  = fallbackToLongTerm ? 'long_term' : 'medium_term';
-  const topArtists = await fetchTopArtists(token, 10, timeRange);
+  const timeRange = fallbackToLongTerm ? 'long_term' : 'medium_term';
+  const market    = await fetchUserMarket(token);
 
-  if (!topArtists.length) return [];
+  // Fetch user's top artists and a different time-range of top tracks in parallel
+  const altRange  = fallbackToLongTerm ? 'short_term' : 'long_term';
+  const [topArtists, altTopTracks] = await Promise.all([
+    fetchTopArtists(token, 10, timeRange),
+    fetchTopTracks(token, 20, altRange).catch(() => []),
+  ]);
 
-  // Pick 3 random seed artists from the user's top 10
-  const seedArtists = randomSample(topArtists, Math.min(3, topArtists.length));
+  if (!topArtists.length && !altTopTracks.length) {
+    throw new Error('No listening history found on this Spotify account yet.');
+  }
 
-  // Fetch related artists for each seed (in parallel)
-  const relatedGroups = await Promise.all(
-    seedArtists.map(a => fetchRelatedArtists(token, a.id).catch(() => []))
+  // Fetch top tracks for each of the user's top artists (in parallel, errors skipped)
+  const artistTrackGroups = await Promise.all(
+    topArtists.map(a =>
+      fetchArtistTopTracks(token, a.id, market).catch(() => [])
+    )
   );
 
-  // Flatten, deduplicate, exclude artists the user already knows well
-  const knownArtistIds = new Set(topArtists.map(a => a.id));
-  const allRelated = relatedGroups
-    .flat()
-    .filter(a => !knownArtistIds.has(a.id));
+  // Combine: artist top-tracks + user's alt-range top tracks
+  const allTracks = [...artistTrackGroups.flat(), ...altTopTracks];
+  const unique    = dedupe(allTracks);
+  const shuffled  = shuffle(unique);
 
-  const uniqueRelated = [...new Map(allRelated.map(a => [a.id, a])).values()];
-
-  // Pick up to 5 related artists randomly
-  const pickedRelated = randomSample(uniqueRelated, Math.min(5, uniqueRelated.length));
-
-  // Fetch top tracks for each related artist (in parallel)
-  const trackGroups = await Promise.all(
-    pickedRelated.map(a => fetchArtistTopTracks(token, a.id).catch(() => []))
-  );
-
-  // Flatten, shuffle, trim to INITIAL_QUEUE_SIZE
-  const allTracks = trackGroups.flat();
-  const shuffled  = allTracks.sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, INITIAL_QUEUE_SIZE);
+  return shuffled.slice(0, INITIAL_QUEUE_SIZE * 2); // extra buffer for the heard-list filter
 }
