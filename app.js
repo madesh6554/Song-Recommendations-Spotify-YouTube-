@@ -1,8 +1,7 @@
-import { QUEUE_LOW_WATERMARK, keysConfigured, saveKeys } from './config.js';
-import { isAuthenticated, handleCallback, redirectToSpotify, getValidToken, logout } from './auth.js';
-import { buildRecommendations, fetchRecentlyPlayed } from './spotify.js';
+import { QUEUE_LOW_WATERMARK, keysConfigured, saveSetup, getArtists } from './config.js';
+import { buildRecommendations } from './music.js';
 import { enqueue, dequeue, peekAll, queueLength, addToNeverSuggest } from './queue.js';
-import { searchYouTube, loadVideo, togglePlay, setOnEnded, setOnProgress, isPlaying } from './youtube.js';
+import { loadVideo, togglePlay, setOnEnded, setOnProgress, isPlaying } from './youtube.js';
 import {
   showLoginScreen, showPlayerScreen,
   updateCard, updateProgressBar, updateQueueSidebar,
@@ -10,73 +9,95 @@ import {
   showError, showInfo,
 } from './player.js';
 
-// ── State ─────────────────────────────────────────────────────
-let currentTrack  = null;
-let historyStack  = [];   // [{track, videoId}, …] last 10
+let currentTrack = null;
+let historyStack = [];   // last 10 played: [{track, videoId}, …]
 
 // ── Boot ──────────────────────────────────────────────────────
 
-document.addEventListener('DOMContentLoaded', async () => {
-  // Show setup screen if API keys haven't been saved yet
+document.addEventListener('DOMContentLoaded', () => {
   if (!keysConfigured()) {
     showSetupScreen();
     return;
   }
+  startApp();
+});
 
-  // Wire static buttons
-  document.getElementById('btn-login').addEventListener('click', redirectToSpotify);
-  document.getElementById('btn-logout').addEventListener('click', logout);
-  document.getElementById('btn-play').addEventListener('click', handlePlayPause);
-  document.getElementById('btn-skip').addEventListener('click', () => playNextSong());
-  document.getElementById('btn-prev').addEventListener('click', playPreviousSong);
-  document.getElementById('btn-never').addEventListener('click', handleNeverSuggest);
+// ── Setup screen ──────────────────────────────────────────────
 
-  // Wire YouTube callbacks
+function showSetupScreen() {
+  document.getElementById('setup-screen').classList.remove('hidden');
+  document.getElementById('login-screen').classList.add('hidden');
+  document.getElementById('player-screen').classList.add('hidden');
+
+  // Pre-fill if partially saved
+  const savedKey     = localStorage.getItem('cfg_youtube_api_key') || '';
+  const savedArtists = localStorage.getItem('cfg_artists') || '';
+  if (savedKey)     document.getElementById('input-yt-key').value    = savedKey;
+  if (savedArtists) document.getElementById('input-artists').value   = savedArtists;
+
+  document.getElementById('btn-save-keys').addEventListener('click', () => {
+    const youtubeKey = document.getElementById('input-yt-key').value.trim();
+    const artists    = document.getElementById('input-artists').value.trim();
+    const errEl      = document.getElementById('setup-error');
+
+    if (!youtubeKey || !artists) {
+      errEl.textContent = 'Please fill in both fields.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+
+    saveSetup({ youtubeKey, artists });
+    window.location.reload();
+  });
+}
+
+// ── Main app ──────────────────────────────────────────────────
+
+function startApp() {
+  showPlayerScreen();
+
   setOnEnded(() => playNextSong());
   setOnProgress((current, duration) => {
     updateProgressBar(current, duration);
     setPlayingState(isPlaying());
   });
 
-  // Handle Spotify OAuth callback
-  const callbackHandled = await handleCallback().catch(() => false);
-  if (callbackHandled) showInfo('Connected to Spotify!');
+  document.getElementById('btn-play').addEventListener('click', () => {
+    togglePlay();
+    setPlayingState(isPlaying());
+  });
+  document.getElementById('btn-skip').addEventListener('click', () => playNextSong());
+  document.getElementById('btn-prev').addEventListener('click', playPreviousSong);
+  document.getElementById('btn-never').addEventListener('click', handleNeverSuggest);
+  document.getElementById('btn-logout').addEventListener('click', () => {
+    // "Logout" = go back to setup
+    localStorage.removeItem('cfg_youtube_api_key');
+    localStorage.removeItem('cfg_artists');
+    window.location.reload();
+  });
 
-  if (!isAuthenticated()) {
-    showLoginScreen();
-    return;
-  }
-
-  showPlayerScreen();
-  await initSession();
-});
-
-// ── Session init ──────────────────────────────────────────────
+  initSession();
+}
 
 async function initSession() {
   showLoadingState();
   try {
-    const token = await getValidToken();
-
-    // Prepopulate heard list so we don't replay recent history
-    const recentIds = await fetchRecentlyPlayed(token).catch(() => []);
-    const { prepopulateHeard } = await import('./queue.js');
-    prepopulateHeard(recentIds);
-
-    // Fetch first batch of recommendations
-    const tracks = await buildRecommendations(token);
+    const tracks = await buildRecommendations();
     if (!tracks.length) {
-      showError('No recommendations found. Try listening to more music on Spotify first.');
+      showError('No songs found. Check your artist names and YouTube API key.');
       hideLoadingState();
       return;
     }
-
     enqueue(tracks);
     await playNextSong();
   } catch (err) {
-    console.error('Session init failed:', err);
-    showError('Could not load recommendations. Check your API keys in config.js.');
     hideLoadingState();
+    if (err.message === 'YOUTUBE_QUOTA_EXCEEDED') {
+      showError('YouTube daily search limit reached. Try again tomorrow.');
+    } else {
+      console.error('Init failed:', err);
+      showError('Could not load songs. Check your YouTube API key in setup.');
+    }
   }
 }
 
@@ -90,124 +111,52 @@ async function playNextSong() {
     await refillQueue();
     track = dequeue();
   }
-
   if (!track) {
-    showError('No new songs available. Your heard list may be full — clearing it soon.');
+    showError('No more songs in queue. Refreshing…');
     hideLoadingState();
+    setTimeout(() => initSession(), 2000);
     return;
   }
 
-  try {
-    let videoId = await searchYouTube(track.id, track.name, track.artists[0].name);
-
-    if (!videoId) {
-      // No YouTube result for this track — silently skip
-      return playNextSong();
-    }
-
-    // Save to history before switching
-    if (currentTrack) {
-      historyStack.unshift({ track: currentTrack, videoId: currentVideoId() });
-      if (historyStack.length > 10) historyStack.pop();
-    }
-
-    currentTrack = track;
-    loadVideo(videoId);
-    updateCard(track);
-    updateQueueSidebar(peekAll());
-    hideLoadingState();
-    setPlayingState(true);
-
-    if (queueLength() < QUEUE_LOW_WATERMARK) {
-      refillQueue();  // background, no await
-    }
-  } catch (err) {
-    hideLoadingState();
-    if (err.message === 'YOUTUBE_QUOTA_EXCEEDED') {
-      showError('YouTube search limit reached for today. Try again tomorrow or add your own API key.');
-    } else {
-      console.error('playNextSong error:', err);
-      showError('Error loading song — skipping.');
-      playNextSong();
-    }
+  // Save current to history
+  if (currentTrack) {
+    historyStack.unshift({ track: currentTrack });
+    if (historyStack.length > 10) historyStack.pop();
   }
+
+  currentTrack = track;
+  loadVideo(track.youtubeId);   // videoId is already in the track object
+  updateCard(track);
+  updateQueueSidebar(peekAll());
+  hideLoadingState();
+  setPlayingState(true);
+
+  if (queueLength() < QUEUE_LOW_WATERMARK) refillQueue();
 }
 
-function currentVideoId() {
-  // Retrieve current videoId from the YouTube player URL
-  try {
-    return window._lastLoadedVideoId || null;
-  } catch {
-    return null;
-  }
-}
-
-async function playPreviousSong() {
+function playPreviousSong() {
   if (!historyStack.length) return;
   const prev = historyStack.shift();
-
-  if (currentTrack) {
-    // Re-enqueue current song at the front of the queue
-    const { queue } = await import('./queue.js');
-    // We use enqueue but want to prepend, so splice directly:
-    // Actually just use the loadVideo path — no need to re-enqueue
-  }
-
   currentTrack = prev.track;
-  loadVideo(prev.videoId);
+  loadVideo(prev.track.youtubeId);
   updateCard(prev.track);
   updateQueueSidebar(peekAll());
   setPlayingState(true);
 }
 
-function handlePlayPause() {
-  togglePlay();
-  setPlayingState(isPlaying());
-}
-
 function handleNeverSuggest() {
   if (!currentTrack) return;
   addToNeverSuggest(currentTrack.id);
-  showInfo(`"${currentTrack.name}" won't be suggested again.`);
+  showInfo(`"${currentTrack.name}" won't appear again.`);
   playNextSong();
 }
 
-// ── Setup screen ─────────────────────────────────────────────
-
-function showSetupScreen() {
-  document.getElementById('setup-screen').classList.remove('hidden');
-  document.getElementById('login-screen').classList.add('hidden');
-
-  document.getElementById('btn-save-keys').addEventListener('click', () => {
-    const clientId   = document.getElementById('input-client-id').value.trim();
-    const redirectUri = document.getElementById('input-redirect').value.trim();
-    const youtubeKey = document.getElementById('input-yt-key').value.trim();
-    const errEl      = document.getElementById('setup-error');
-
-    if (!clientId || !redirectUri || !youtubeKey) {
-      errEl.classList.remove('hidden');
-      return;
-    }
-
-    saveKeys({ clientId, redirectUri, youtubeKey });
-    window.location.reload();  // reload so config.js re-reads from localStorage
-  });
-}
-
-// ── Queue refill ──────────────────────────────────────────────
-
-async function refillQueue(fallback = false) {
+async function refillQueue() {
   try {
-    const token  = await getValidToken();
-    const tracks = await buildRecommendations(token, fallback);
-
-    if (!tracks.length && !fallback) {
-      return refillQueue(true);  // retry with long_term seeds
-    }
-
+    const tracks = await buildRecommendations();
     enqueue(tracks);
     updateQueueSidebar(peekAll());
   } catch (err) {
-    console.error('Queue refill failed:', err);
+    console.error('Refill failed:', err);
   }
 }
