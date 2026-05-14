@@ -1,4 +1,4 @@
-import { QUEUE_LOW_WATERMARK } from './config.js';
+import { QUEUE_LOW_WATERMARK, keysConfigured, saveKeys } from './config.js';
 import { isAuthenticated, handleCallback, redirectToSpotify, getValidToken, logout } from './auth.js';
 import { buildRecommendations, fetchRecentlyPlayed } from './spotify.js';
 import { enqueue, dequeue, peekAll, queueLength, addToNeverSuggest } from './queue.js';
@@ -17,6 +17,12 @@ let historyStack  = [];   // [{track, videoId}, …] last 10
 // ── Boot ──────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Show setup screen if API keys haven't been saved yet
+  if (!keysConfigured()) {
+    showSetupScreen();
+    return;
+  }
+
   // Wire static buttons
   document.getElementById('btn-login').addEventListener('click', redirectToSpotify);
   document.getElementById('btn-logout').addEventListener('click', logout);
@@ -164,6 +170,28 @@ function handleNeverSuggest() {
   addToNeverSuggest(currentTrack.id);
   showInfo(`"${currentTrack.name}" won't be suggested again.`);
   playNextSong();
+}
+
+// ── Setup screen ─────────────────────────────────────────────
+
+function showSetupScreen() {
+  document.getElementById('setup-screen').classList.remove('hidden');
+  document.getElementById('login-screen').classList.add('hidden');
+
+  document.getElementById('btn-save-keys').addEventListener('click', () => {
+    const clientId   = document.getElementById('input-client-id').value.trim();
+    const redirectUri = document.getElementById('input-redirect').value.trim();
+    const youtubeKey = document.getElementById('input-yt-key').value.trim();
+    const errEl      = document.getElementById('setup-error');
+
+    if (!clientId || !redirectUri || !youtubeKey) {
+      errEl.classList.remove('hidden');
+      return;
+    }
+
+    saveKeys({ clientId, redirectUri, youtubeKey });
+    window.location.reload();  // reload so config.js re-reads from localStorage
+  });
 }
 
 // ── Queue refill ──────────────────────────────────────────────

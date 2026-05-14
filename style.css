@@ -29,6 +29,83 @@ body {
 /* ── Utility ───────────────────────────────────────────────── */
 .hidden { display: none !important; }
 
+/* ── SETUP SCREEN ──────────────────────────────────────────── */
+#setup-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: radial-gradient(ellipse at 50% 0%, #1a3a2a 0%, var(--bg-primary) 70%);
+  padding: 24px;
+}
+
+.setup-card {
+  background: var(--bg-secondary);
+  border-radius: 16px;
+  padding: 40px 36px;
+  width: 100%;
+  max-width: 460px;
+  box-shadow: 0 16px 48px rgba(0,0,0,.6);
+}
+
+.setup-card h1 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  margin: 16px 0 8px;
+}
+
+.setup-card > p {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin-bottom: 28px;
+  line-height: 1.5;
+}
+
+.setup-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 20px;
+}
+
+.setup-field label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.setup-field input {
+  background: var(--bg-elevated);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  padding: 12px 14px;
+  outline: none;
+  transition: border-color var(--transition);
+  font-family: monospace;
+}
+
+.setup-field input:focus { border-color: var(--accent); }
+
+.setup-field small {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.setup-field small strong { color: var(--text-secondary); }
+
+.setup-card .btn-primary { width: 100%; margin-top: 8px; }
+
+.setup-error {
+  color: #f5a5a5;
+  font-size: 0.85rem;
+  margin-top: 10px;
+  text-align: center;
+}
+
 /* ── LOGIN SCREEN ──────────────────────────────────────────── */
 #login-screen {
   display: flex;
