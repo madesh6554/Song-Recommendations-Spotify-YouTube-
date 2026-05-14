@@ -13,18 +13,11 @@ const iconPlay     = document.getElementById('icon-play');
 const iconPause    = document.getElementById('icon-pause');
 const loadingOverlay = document.getElementById('loading-overlay');
 const toastContainer = document.getElementById('toast-container');
-const loginScreen  = document.getElementById('login-screen');
 const playerScreen = document.getElementById('player-screen');
 
 // ── Screen switching ──────────────────────────────────────────
 
-export function showLoginScreen() {
-  loginScreen.classList.remove('hidden');
-  playerScreen.classList.add('hidden');
-}
-
 export function showPlayerScreen() {
-  loginScreen.classList.add('hidden');
   playerScreen.classList.remove('hidden');
 }
 
